@@ -1,5 +1,5 @@
 import { MessageInput } from "@/components/messageInput";
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef, KeyboardEvent } from "react";
 
 type Props = {
   isChatProcessing: boolean;
@@ -19,42 +19,64 @@ export const MessageInputContainer = ({
   selectVoiceLanguage
 }: Props) => {
   const [userMessage, setUserMessage] = useState("");
-  const [speechRecognition, setSpeechRecognition] =
-    useState<SpeechRecognition>();
-  const [isMicRecording, setIsMicRecording] = useState(false);
+  const [speechRecognition, setSpeechRecognition] = useState<SpeechRecognition>();
+  //const [isMicRecording, setIsMicRecording] = useState(false);
+  const isMicRecording = useRef<boolean>(false);
+  const accumulatedMessage = useRef<string>("");
 
   // 音声認識の結果を処理する
   const handleRecognitionResult = useCallback(
     (event: SpeechRecognitionEvent) => {
-      const text = event.results[0][0].transcript;
-      setUserMessage(text);
+      var tempText = accumulatedMessage.current;
+      for (let i = event.resultIndex; i < event.results.length; i++) {
 
-      // 発言の終了時
-      if (event.results[0].isFinal) {
-        setUserMessage(text);
-        // 返答文の生成を開始
-        onChatProcessStart(text);
+        //console.log("results[", i, "].isFinal=", event.results[i].isFinal, " isMicRecording=", isMicRecording.current);
+        const currentText = event.results[i][0].transcript.trim();
+
+        if (currentText !== "") {
+          const delimiter = (accumulatedMessage.current.length === 0) ? "" : " ";
+
+          // 発言の終了時
+          if (event.results[i].isFinal) {
+            accumulatedMessage.current += delimiter + currentText;
+            setUserMessage(accumulatedMessage.current);
+          }
+          else {
+            tempText += delimiter + currentText;
+            setUserMessage(tempText);
+          }
+        }
       }
     },
-    [onChatProcessStart]
+    [setUserMessage]
   );
 
-  // 無音が続いた場合も終了する
-  const handleRecognitionEnd = useCallback(() => {
-    setIsMicRecording(false);
-  }, []);
+  const handleRecognitionEnd = useCallback((event:Event) => {
+    if (!isMicRecording.current) {
+      console.log("Recognition End, message=", accumulatedMessage.current);
+      // 溜めていたメッセージの処理をする
+      const text = accumulatedMessage.current;
+      accumulatedMessage.current = "";
+      if (text !== "") {
+        onChatProcessStart(text);
+      }
+    }
+  }, [onChatProcessStart]);
 
   const handleClickMicButton = useCallback(() => {
-    if (isMicRecording) {
-      speechRecognition?.abort();
-      setIsMicRecording(false);
+    console.log("handleClickMicButton isMicRecording=", isMicRecording.current);
+    if (isMicRecording.current) {
+      speechRecognition!.continuous = false;
+      speechRecognition?.stop();
+      isMicRecording.current = false;
 
       return;
     }
 
+    speechRecognition!.continuous = true;
     speechRecognition?.start();
-    setIsMicRecording(true);
-  }, [isMicRecording, speechRecognition]);
+    isMicRecording.current = true;
+  }, [speechRecognition, isMicRecording.current]);
 
   const handleClickSendButton = useCallback(() => {
     onChatProcessStart(userMessage);
@@ -71,7 +93,7 @@ export const MessageInputContainer = ({
     const recognition = new SpeechRecognition();
     recognition.lang = selectVoiceLanguage;
     recognition.interimResults = true; // 認識の途中結果を返す
-    recognition.continuous = false; // 発言の終了時に認識を終了する
+    recognition.continuous = true; // 発言の終了時に認識を終了する
 
     recognition.addEventListener("result", handleRecognitionResult);
     recognition.addEventListener("end", handleRecognitionEnd);
@@ -85,11 +107,44 @@ export const MessageInputContainer = ({
     }
   }, [isChatProcessing]);
 
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      //console.log("handleKeyDown code=", event.code, " target=", event.target);
+      if (event.code === 'Space' && event.target === document.body) { // スペースキーが押された
+        event.preventDefault(); // スペースキーのデフォルト動作を防ぐ
+        //startRecording();
+        if (!isMicRecording.current) {
+          handleClickMicButton();
+        }
+      }
+    };
+
+    const handleKeyUp = (event: KeyboardEvent) => {
+      //console.log("handleKeyUp code=", event.code, " target=", event.target);
+      if (event.code === 'Space' && event.target === document.body) { // スペースキーが離された
+        //stopRecording();
+        if (isMicRecording.current) {
+          handleClickMicButton();
+        }
+      }
+    };
+
+    // イベントリスナーを追加
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+
+    // コンポーネントがアンマウントされるときにイベントリスナーを削除
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+    };
+  }, [handleClickMicButton]);
+
   return (
     <MessageInput
       userMessage={userMessage}
       isChatProcessing={isChatProcessing}
-      isMicRecording={isMicRecording}
+      isMicRecording={isMicRecording.current}
       onChangeUserMessage={(e) => setUserMessage(e.target.value)}
       onClickMicButton={handleClickMicButton}
       onClickSendButton={handleClickSendButton}
